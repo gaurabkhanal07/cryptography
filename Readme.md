@@ -27,12 +27,14 @@ A simple Python tool for encrypting and decrypting text. This project demonstrat
 ```bash
 git clone https://github.com/gaurabkhanal07/cryptography.git
 cd cryptography
-
+```
 2.(Optional) Create a virtual environment
+```bash
 python -m venv .venv
 source .venv/bin/activate   # Linux/macOS
 .venv\Scripts\activate      # Windows
-
+```
 3. Install the requirements
+```bash
 pip install -r requirements.txt
-
+```
