@@ -1,72 +1,29 @@
-SHIFT = 3  # Fixed shift
+# caesar_cipher.py
+from colorama import Fore
 
-
-def encrypt(text):
+def encrypt(text, shift):
     result = ""
     for char in text:
-        if char.isalpha():
-            ascii_offset = 65 if char.isupper() else 97
-            shifted = (ord(char) - ascii_offset + SHIFT) % 26
-            result += chr(shifted + ascii_offset)
+        if char.isupper():
+            result += chr((ord(char) - 65 + shift) % 26 + 65)
+        elif char.islower():
+            result += chr((ord(char) - 97 + shift) % 26 + 97)
         else:
             result += char
     return result
 
+def decrypt(text, shift):
+    return encrypt(text, -shift)
 
-def decrypt(text):
-    result = ""
-    for char in text:
-        if char.isalpha():
-            ascii_offset = 65 if char.isupper() else 97
-            shifted = (ord(char) - ascii_offset - SHIFT) % 26
-            result += chr(shifted + ascii_offset)
-        else:
-            result += char
-    return result
-
-
-def banner():
-    print("""
-============================
-   CAESAR CIPHER TOOL
-     (SHIFT = 3)
-============================
-""")
-
-
-def main():
-    banner()
-
-    # 🔹 Initial input
-    text = input("Enter your text: ")
-
-    while True:
-        print("\nWhat do you want to do?")
-        print("1. Encrypt")
-        print("2. Decrypt")
-        print("3. Change Text")
-        print("4. Exit")
-
-        choice = input("Enter choice (1/2/3/4): ")
-
-        if choice == "1":
-            text = encrypt(text)
-            print("[+] Encrypted:", text)
-
-        elif choice == "2":
-            text = decrypt(text)
-            print("[+] Decrypted:", text)
-
-        elif choice == "3":
-            text = input("Enter new text: ")
-
-        elif choice == "4":
-            print("Exiting tool...")
-            break
-
-        else:
-            print("[-] Invalid choice!")
-
-
-if __name__ == "__main__":
-    main()
+def run():
+    print(Fore.CYAN + "\n=== Caesar Cipher ===")
+    choice = input(Fore.GREEN + "Do you want to (E)ncrypt or (D)ecrypt? ").strip().lower()
+    text = input(Fore.GREEN + "Enter the text: ")
+    shift = int(input(Fore.GREEN + "Enter the shift key (number): "))
+    
+    if choice == "e":
+        print(Fore.YELLOW + "Encrypted Text: " + Fore.MAGENTA + encrypt(text, shift))
+    elif choice == "d":
+        print(Fore.YELLOW + "Decrypted Text: " + Fore.MAGENTA + decrypt(text, shift))
+    else:
+        print(Fore.RED + "Invalid choice!")
