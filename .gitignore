@@ -1,0 +1,10 @@
+# Virtual environment
+venv/
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Optional OS files
+.DS_Store
