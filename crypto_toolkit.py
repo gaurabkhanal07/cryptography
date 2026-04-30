@@ -16,7 +16,7 @@ from Crypto.Cipher import AES, ARC2, ARC4, Blowfish, CAST, ChaCha20, DES, DES3, 
 from Crypto.Hash import CMAC, RIPEMD160
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes as crypto_hashes
-from cryptography.hazmat.primitives.asymmetric import dsa, ec, ed25519, ed448, padding, rsa
+from cryptography.hazmat.primitives.asymmetric import dh, dsa, ec, ed25519, ed448, padding, rsa
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms as crypto_algorithms, modes
 from cryptography.hazmat.primitives.ciphers.aead import AESCCM, AESGCM, ChaCha20Poly1305
 from cryptography.hazmat.primitives.poly1305 import Poly1305
@@ -981,6 +981,368 @@ def _one_time_pad(text: str, key: str, encrypt: bool = True) -> str:
     return "".join(result)
 
 
+def _letters_only(text: str, alphabet: str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ") -> str:
+    return "".join(char for char in text.upper() if char in alphabet)
+
+
+def _chunk_text(text: str, size: int, pad: str = "X") -> list[str]:
+    chunks = [text[index:index + size] for index in range(0, len(text), size)]
+    if chunks and len(chunks[-1]) < size:
+        chunks[-1] = chunks[-1] + pad * (size - len(chunks[-1]))
+    elif not chunks and size > 0:
+        chunks = [pad * size]
+    return chunks
+
+
+def _mod_inverse(value: int, modulus: int = 26) -> int:
+    return pow(value, -1, modulus)
+
+
+def _matrix_minor(matrix: list[list[int]], row: int, col: int) -> list[list[int]]:
+    return [
+        [value for c_index, value in enumerate(matrix_row) if c_index != col]
+        for r_index, matrix_row in enumerate(matrix)
+        if r_index != row
+    ]
+
+
+def _matrix_determinant(matrix: list[list[int]]) -> int:
+    size = len(matrix)
+    if size == 1:
+        return matrix[0][0]
+    if size == 2:
+        return matrix[0][0] * matrix[1][1] - matrix[0][1] * matrix[1][0]
+    determinant = 0
+    for col, value in enumerate(matrix[0]):
+        determinant += ((-1) ** col) * value * _matrix_determinant(_matrix_minor(matrix, 0, col))
+    return determinant
+
+
+def _matrix_adjugate(matrix: list[list[int]]) -> list[list[int]]:
+    size = len(matrix)
+    cofactors: list[list[int]] = []
+    for row in range(size):
+        cofactor_row: list[int] = []
+        for col in range(size):
+            minor = _matrix_minor(matrix, row, col)
+            cofactor_row.append(((-1) ** (row + col)) * _matrix_determinant(minor))
+        cofactors.append(cofactor_row)
+    return [list(column) for column in zip(*cofactors)]
+
+
+def _matrix_inverse_mod(matrix: list[list[int]], modulus: int = 26) -> list[list[int]]:
+    determinant = _matrix_determinant(matrix) % modulus
+    determinant_inverse = _mod_inverse(determinant, modulus)
+    adjugate = _matrix_adjugate(matrix)
+    return [[(determinant_inverse * value) % modulus for value in row] for row in adjugate]
+
+
+def _matrix_vector_multiply(matrix: list[list[int]], vector: list[int], modulus: int = 26) -> list[int]:
+    return [sum(row[index] * vector[index] for index in range(len(vector))) % modulus for row in matrix]
+
+
+def _normalize_keyword(keyword: str, alphabet: str) -> str:
+    normalized = _letters_only(keyword)
+    if not normalized:
+        raise ValueError("Keyword must contain alphabetic characters.")
+    return normalized
+
+
+def _build_keyed_square(keyword: str, alphabet: str) -> tuple[str, dict[str, int]]:
+    normalized_keyword = _normalize_keyword(keyword, alphabet)
+    sequence = []
+    seen = set()
+    for char in normalized_keyword + alphabet:
+        if char not in seen and char in alphabet:
+            sequence.append(char)
+            seen.add(char)
+    square = "".join(sequence)
+    return square, {char: index for index, char in enumerate(square)}
+
+
+def _pairwise(text: str, filler: str = "X") -> list[str]:
+    cleaned = _letters_only(text)
+    pairs: list[str] = []
+    index = 0
+    while index < len(cleaned):
+        first = cleaned[index]
+        if index + 1 < len(cleaned):
+            second = cleaned[index + 1]
+            if first == second:
+                pairs.append(first + filler)
+                index += 1
+            else:
+                pairs.append(first + second)
+                index += 2
+        else:
+            pairs.append(first + filler)
+            index += 1
+    if not pairs:
+        pairs.append(filler * 2)
+    return pairs
+
+
+def _spiral_indices(rows: int, cols: int) -> list[tuple[int, int]]:
+    indices: list[tuple[int, int]] = []
+    top = 0
+    bottom = rows - 1
+    left = 0
+    right = cols - 1
+    while top <= bottom and left <= right:
+        for col in range(left, right + 1):
+            indices.append((top, col))
+        top += 1
+        for row in range(top, bottom + 1):
+            indices.append((row, right))
+        right -= 1
+        if top <= bottom:
+            for col in range(right, left - 1, -1):
+                indices.append((bottom, col))
+            bottom -= 1
+        if left <= right:
+            for row in range(bottom, top - 1, -1):
+                indices.append((row, left))
+            left += 1
+    return indices
+
+
+def _columnar_transposition_cipher(text: str, key: str, encrypt: bool = True) -> str:
+    text = _letters_only(text)
+    key = _normalize_keyword(key, "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+    num_columns = len(key)
+    order = sorted(range(num_columns), key=lambda index: (key[index], index))
+    if encrypt:
+        rows = (len(text) + num_columns - 1) // num_columns
+        grid = [["" for _ in range(num_columns)] for _ in range(rows)]
+        index = 0
+        for row in range(rows):
+            for col in range(num_columns):
+                if index < len(text):
+                    grid[row][col] = text[index]
+                    index += 1
+        return "".join(grid[row][col] for col in order for row in range(rows) if grid[row][col])
+    rows = (len(text) + num_columns - 1) // num_columns
+    full_columns = len(text) % num_columns
+    if full_columns == 0 and text:
+        full_columns = num_columns
+    column_lengths = [rows if column < full_columns else rows - 1 for column in range(num_columns)]
+    columns = [""] * num_columns
+    index = 0
+    for column in order:
+        length = column_lengths[column]
+        columns[column] = text[index:index + length]
+        index += length
+    result = []
+    for row in range(rows):
+        for column in range(num_columns):
+            if row < len(columns[column]):
+                result.append(columns[column][row])
+    return "".join(result)
+
+
+def _hill_transform(text: str, key_text: str, encrypt: bool = True) -> str:
+    key_letters = _letters_only(key_text)
+    size = int(len(key_letters) ** 0.5)
+    if size * size != len(key_letters) or not key_letters:
+        raise ValueError("Hill key must contain a perfect square number of letters.")
+    matrix = [
+        [ord(key_letters[row * size + col]) - 65 for col in range(size)]
+        for row in range(size)
+    ]
+    working_matrix = matrix if encrypt else _matrix_inverse_mod(matrix)
+    cleaned = _letters_only(text)
+    if not cleaned:
+        return ""
+    if encrypt and len(cleaned) % size != 0:
+        cleaned += "X" * (size - len(cleaned) % size)
+    result: list[str] = []
+    for chunk in _chunk_text(cleaned, size):
+        vector = [ord(char) - 65 for char in chunk]
+        transformed = _matrix_vector_multiply(working_matrix, vector)
+        result.extend(chr(value + 65) for value in transformed)
+    output = "".join(result)
+    return output if encrypt else output.rstrip("X")
+
+
+def _beaufort_cipher(text: str, key: str) -> str:
+    key = _normalize_keyword(key, "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+    result: list[str] = []
+    key_index = 0
+    for char in text:
+        if char.isalpha():
+            shift = ord(key[key_index % len(key)]) - 65
+            base = 65 if char.isupper() else 97
+            encoded = chr((shift - (ord(char.upper()) - 65)) % 26 + base)
+            result.append(encoded)
+            key_index += 1
+        else:
+            result.append(char)
+    return "".join(result)
+
+
+def _gronsfeld_cipher(text: str, key: str, encrypt: bool = True) -> str:
+    if not key.isdigit():
+        raise ValueError("Gronsfeld key must contain digits only.")
+    result: list[str] = []
+    key_index = 0
+    for char in text:
+        if char.isalpha():
+            shift = int(key[key_index % len(key)])
+            if not encrypt:
+                shift = -shift
+            base = 65 if char.isupper() else 97
+            result.append(chr((ord(char) - base + shift) % 26 + base))
+            key_index += 1
+        else:
+            result.append(char)
+    return "".join(result)
+
+
+def _simple_substitution_cipher(text: str, mapping: str, encrypt: bool = True) -> str:
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    mapping_letters = _letters_only(mapping)
+    if len(mapping_letters) != 26:
+        raise ValueError("Simple substitution key must be 26 letters long.")
+    forward = {plain: cipher for plain, cipher in zip(alphabet, mapping_letters)}
+    backward = {cipher: plain for plain, cipher in forward.items()}
+    result: list[str] = []
+    for char in text:
+        if char.isalpha():
+            replacement = forward[char.upper()] if encrypt else backward[char.upper()]
+            result.append(replacement if char.isupper() else replacement.lower())
+        else:
+            result.append(char)
+    return "".join(result)
+
+
+def _route_cipher(text: str, rows: int, cols: int, encrypt: bool = True) -> str:
+    cleaned = _letters_only(text)
+    if rows < 2 or cols < 2:
+        raise ValueError("Route cipher requires at least 2 rows and 2 columns.")
+    total = rows * cols
+    if encrypt:
+        cleaned = cleaned.ljust(total, "X")[:total]
+        grid = [["" for _ in range(cols)] for _ in range(rows)]
+        index = 0
+        for row in range(rows):
+            for col in range(cols):
+                grid[row][col] = cleaned[index]
+                index += 1
+        return "".join(grid[row][col] for row, col in _spiral_indices(rows, cols))
+    cleaned = cleaned.ljust(total, "X")[:total]
+    grid = [["" for _ in range(cols)] for _ in range(rows)]
+    for index, (row, col) in enumerate(_spiral_indices(rows, cols)):
+        grid[row][col] = cleaned[index]
+    return "".join(grid[row][col] for row in range(rows) for col in range(cols))
+
+
+def _nihilist_cipher(text: str, key: str, encrypt: bool = True) -> str:
+    alphabet = "ABCDEFGHIKLMNOPQRSTUVWXYZ"
+    square, position_map = _build_keyed_square(key, alphabet)
+    key_letters = _letters_only(key).replace("J", "I")
+    if not key_letters:
+        raise ValueError("Nihilist key must contain letters.")
+    key_numbers = []
+    for char in key_letters:
+        offset = position_map[char]
+        key_numbers.append((offset // 5 + 1) * 10 + (offset % 5 + 1))
+    if encrypt:
+        cleaned = _letters_only(text).replace("J", "I")
+        plain_numbers = []
+        for char in cleaned:
+            offset = position_map[char]
+            plain_numbers.append((offset // 5 + 1) * 10 + (offset % 5 + 1))
+        return " ".join(str(plain_numbers[index] + key_numbers[index % len(key_numbers)]) for index in range(len(plain_numbers)))
+    numbers = [int(part) for part in text.split() if part.isdigit()]
+    result = []
+    for index, value in enumerate(numbers):
+        base = value - key_numbers[index % len(key_numbers)]
+        row = base // 10 - 1
+        col = base % 10 - 1
+        result.append(square[row * 5 + col])
+    return "".join(result)
+
+
+def _four_square_cipher(text: str, key1: str, key2: str, encrypt: bool = True) -> str:
+    alphabet = "ABCDEFGHIKLMNOPQRSTUVWXYZ"
+    plain_square = alphabet
+    top_right, top_right_map = _build_keyed_square(key1, alphabet)
+    bottom_left, bottom_left_map = _build_keyed_square(key2, alphabet)
+    pairs = _pairwise(text)
+    result: list[str] = []
+    for pair in pairs:
+        left = pair[0].replace("J", "I")
+        right = pair[1].replace("J", "I")
+        if encrypt:
+            left_index = plain_square.index(left)
+            right_index = plain_square.index(right)
+            left_row, left_col = divmod(left_index, 5)
+            right_row, right_col = divmod(right_index, 5)
+            result.append(top_right[left_row * 5 + right_col])
+            result.append(bottom_left[right_row * 5 + left_col])
+        else:
+            left_index = top_right_map[left]
+            right_index = bottom_left_map[right]
+            left_row, left_col = divmod(left_index, 5)
+            right_row, right_col = divmod(right_index, 5)
+            result.append(plain_square[left_row * 5 + right_col])
+            result.append(plain_square[right_row * 5 + left_col])
+    return "".join(result)
+
+
+def _two_square_cipher(text: str, key1: str, key2: str, encrypt: bool = True) -> str:
+    alphabet = "ABCDEFGHIKLMNOPQRSTUVWXYZ"
+    square1, map1 = _build_keyed_square(key1, alphabet)
+    square2, map2 = _build_keyed_square(key2, alphabet)
+    pairs = _pairwise(text)
+    result: list[str] = []
+    for pair in pairs:
+        first = pair[0].replace("J", "I")
+        second = pair[1].replace("J", "I")
+        index1 = map1[first]
+        index2 = map2[second]
+        row1, col1 = divmod(index1, 5)
+        row2, col2 = divmod(index2, 5)
+        if encrypt:
+            result.append(square1[row1 * 5 + col2])
+            result.append(square2[row2 * 5 + col1])
+        else:
+            result.append(alphabet[row1 * 5 + col2])
+            result.append(alphabet[row2 * 5 + col1])
+    return "".join(result)
+
+
+def _adfgx_adfgvx_cipher(text: str, keyword: str, encrypt: bool = True, variant: str = "ADFGX") -> str:
+    if variant == "ADFGX":
+        alphabet = "ABCDEFGHIKLMNOPQRSTUVWXYZ"
+        symbols = "ADFGX"
+    elif variant == "ADFGVX":
+        alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+        symbols = "ADFGVX"
+    else:
+        raise ValueError("Unsupported variant.")
+    square, position_map = _build_keyed_square(keyword, alphabet)
+    side = 5 if variant == "ADFGX" else 6
+    if encrypt:
+        cleaned = "".join(char for char in text.upper() if char in alphabet).replace("J", "I")
+        fractionated = []
+        for char in cleaned:
+            offset = position_map[char]
+            row, col = divmod(offset, side)
+            fractionated.append(symbols[row])
+            fractionated.append(symbols[col])
+        return _columnar_transposition_cipher("".join(fractionated), keyword, encrypt=True)
+    transposed = _columnar_transposition_cipher(_letters_only(text, symbols), keyword, encrypt=False)
+    if len(transposed) % 2 != 0:
+        transposed = transposed[:-1]
+    result = []
+    for index in range(0, len(transposed), 2):
+        row = symbols.index(transposed[index])
+        col = symbols.index(transposed[index + 1])
+        result.append(square[row * side + col])
+    return "".join(result)
+
+
 def _caesar_demo() -> None:
     choice = _prompt("Do you want to (E)ncrypt or (D)ecrypt? ").lower()
     text = _prompt("Enter the text: ")
@@ -1159,6 +1521,121 @@ def _pigpen_demo() -> None:
     _pause()
 
 
+def _hill_demo() -> None:
+    choice = _prompt("Do you want to (E)ncrypt or (D)ecrypt? ").lower()
+    text = _prompt("Enter the text: ")
+    key = _prompt("Enter the Hill key (square letter matrix): ")
+    try:
+        result = _hill_transform(text, key, encrypt=(choice == "e"))
+        print(Fore.YELLOW + "Result: " + Fore.MAGENTA + result)
+    except Exception as exc:
+        _print_error(str(exc))
+    _pause()
+
+
+def _beaufort_demo() -> None:
+    text = _prompt("Enter the text: ")
+    key = _prompt("Enter the key: ")
+    try:
+        result = _beaufort_cipher(text, key)
+        print(Fore.YELLOW + "Result: " + Fore.MAGENTA + result)
+    except Exception as exc:
+        _print_error(str(exc))
+    _pause()
+
+
+def _gronsfeld_demo() -> None:
+    choice = _prompt("Do you want to (E)ncrypt or (D)ecrypt? ").lower()
+    text = _prompt("Enter the text: ")
+    key = _prompt("Enter the numeric key: ")
+    try:
+        result = _gronsfeld_cipher(text, key, encrypt=(choice == "e"))
+        print(Fore.YELLOW + "Result: " + Fore.MAGENTA + result)
+    except Exception as exc:
+        _print_error(str(exc))
+    _pause()
+
+
+def _simple_substitution_demo() -> None:
+    choice = _prompt("Do you want to (E)ncrypt or (D)ecrypt? ").lower()
+    text = _prompt("Enter the text: ")
+    mapping = _prompt("Enter the 26-letter substitution alphabet: ")
+    try:
+        result = _simple_substitution_cipher(text, mapping, encrypt=(choice == "e"))
+        print(Fore.YELLOW + "Result: " + Fore.MAGENTA + result)
+    except Exception as exc:
+        _print_error(str(exc))
+    _pause()
+
+
+def _route_demo() -> None:
+    choice = _prompt("Do you want to (E)ncrypt or (D)ecrypt? ").lower()
+    text = _prompt("Enter the text: ")
+    try:
+        rows = int(_prompt("Enter the number of rows: "))
+        cols = int(_prompt("Enter the number of columns: "))
+    except ValueError:
+        _print_error("Rows and columns must be numbers.")
+        _pause()
+        return
+    try:
+        result = _route_cipher(text, rows, cols, encrypt=(choice == "e"))
+        print(Fore.YELLOW + "Result: " + Fore.MAGENTA + result)
+    except Exception as exc:
+        _print_error(str(exc))
+    _pause()
+
+
+def _nihilist_demo() -> None:
+    choice = _prompt("Do you want to (E)ncrypt or (D)ecrypt? ").lower()
+    text = _prompt("Enter the text: ")
+    key = _prompt("Enter the key: ")
+    try:
+        result = _nihilist_cipher(text, key, encrypt=(choice == "e"))
+        print(Fore.YELLOW + "Result: " + Fore.MAGENTA + result)
+    except Exception as exc:
+        _print_error(str(exc))
+    _pause()
+
+
+def _four_square_demo() -> None:
+    choice = _prompt("Do you want to (E)ncrypt or (D)ecrypt? ").lower()
+    text = _prompt("Enter the text: ")
+    key1 = _prompt("Enter the first key: ")
+    key2 = _prompt("Enter the second key: ")
+    try:
+        result = _four_square_cipher(text, key1, key2, encrypt=(choice == "e"))
+        print(Fore.YELLOW + "Result: " + Fore.MAGENTA + result)
+    except Exception as exc:
+        _print_error(str(exc))
+    _pause()
+
+
+def _two_square_demo() -> None:
+    choice = _prompt("Do you want to (E)ncrypt or (D)ecrypt? ").lower()
+    text = _prompt("Enter the text: ")
+    key1 = _prompt("Enter the first key: ")
+    key2 = _prompt("Enter the second key: ")
+    try:
+        result = _two_square_cipher(text, key1, key2, encrypt=(choice == "e"))
+        print(Fore.YELLOW + "Result: " + Fore.MAGENTA + result)
+    except Exception as exc:
+        _print_error(str(exc))
+    _pause()
+
+
+def _adfgx_demo(variant: str) -> None:
+    choice = _prompt("Do you want to (E)ncrypt or (D)ecrypt? ").lower()
+    text = _prompt("Enter the text: ")
+    keyword = _prompt("Enter the key word: ")
+    try:
+        result = _adfgx_adfgvx_cipher(text, keyword, encrypt=(choice == "e"), variant=variant)
+        print(Fore.YELLOW + "Result: " + Fore.MAGENTA + result)
+    except Exception as exc:
+        _print_error(str(exc))
+    _pause()
+
+
 def _substitution_items() -> list[MenuItem]:
     return [
         MenuItem("Caesar Cipher", _caesar_demo),
@@ -1167,12 +1644,12 @@ def _substitution_items() -> list[MenuItem]:
         MenuItem("Vigenère Cipher", _vigenere_demo),
         MenuItem("Autokey Cipher", _autokey_demo),
         MenuItem("Playfair Cipher", _playfair_demo),
-        MenuItem("Beaufort Cipher", _unsupported("Beaufort Cipher", "complex variant of Vigenère; see Autokey/Vigenère")),
-        MenuItem("Gronsfeld Cipher", _unsupported("Gronsfeld Cipher", "variant of Vigenère with numeric key")),
-        MenuItem("Hill Cipher", _unsupported("Hill Cipher", "requires matrix math; educational implementation omitted")),
-        MenuItem("Four-Square Cipher", _unsupported("Four-Square Cipher", "advanced variant; see Playfair")),
-        MenuItem("Two-Square Cipher", _unsupported("Two-Square Cipher", "advanced variant; see Playfair")),
-        MenuItem("Simple Substitution", _unsupported("Simple Substitution", "requires full substitution table input")),
+        MenuItem("Beaufort Cipher", _beaufort_demo),
+        MenuItem("Gronsfeld Cipher", _gronsfeld_demo),
+        MenuItem("Hill Cipher", _hill_demo),
+        MenuItem("Four-Square Cipher", _four_square_demo),
+        MenuItem("Two-Square Cipher", _two_square_demo),
+        MenuItem("Simple Substitution", _simple_substitution_demo),
     ]
 
 
@@ -1180,9 +1657,9 @@ def _transposition_items() -> list[MenuItem]:
     return [
         MenuItem("Rail Fence Cipher", _rail_fence_demo),
         MenuItem("Scytale Cipher", _scytale_demo),
-        MenuItem("Columnar Transposition", _unsupported("Columnar Transposition", "complex reconstruction logic; see Rail Fence for similar transposition")),
+        MenuItem("Columnar Transposition", _columnar_demo),
         MenuItem("Double Transposition", _unsupported("Double Transposition", "apply Rail Fence twice; see Rail Fence")),
-        MenuItem("Route Cipher", _unsupported("Route Cipher", "requires specific path definition")),
+        MenuItem("Route Cipher", _route_demo),
     ]
 
 
@@ -1190,15 +1667,15 @@ def _fractionation_items() -> list[MenuItem]:
     return [
         MenuItem("Bacon's Cipher (A/B)", _bacon_demo),
         MenuItem("Polybius Square", _polybius_demo),
-        MenuItem("Nihilist Cipher", _unsupported("Nihilist Cipher", "variant of Polybius + transposition")),
+        MenuItem("Nihilist Cipher", _nihilist_demo),
     ]
 
 
 def _product_items() -> list[MenuItem]:
     return [
-        MenuItem("ADFGVX Cipher", _unsupported("ADFGVX Cipher", "WWI-era; complex fractionation+transposition")),
-        MenuItem("ADFGX Cipher", _unsupported("ADFGX Cipher", "WWI-era variant; see ADFGVX")),
-        MenuItem("Bifid Cipher", _unsupported("Bifid Cipher", "complex matrix reconstruction; educational interest")),
+        MenuItem("ADFGVX Cipher", lambda: _adfgx_demo("ADFGVX")),
+        MenuItem("ADFGX Cipher", lambda: _adfgx_demo("ADFGX")),
+        MenuItem("Bifid Cipher", _bifid_demo),
         MenuItem("Trifid Cipher", _unsupported("Trifid Cipher", "extends Bifid to 3-way split")),
     ]
 
