@@ -1,2 +1,10 @@
 colorama>=0.4.6
 pyfiglet>=0.8.post1
+cryptography>=47.0.0
+pycryptodome>=3.23.0
+bcrypt>=5.0.0
+argon2-cffi>=25.1.0
+blake3>=1.0.8
+gmssl>=3.2.2
+gostcrypto>=1.2.5
+pqcrypto>=0.4.0

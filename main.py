@@ -1,31 +1,17 @@
 # main.py
-from colorama import init, Fore, Style
+from colorama import Fore, init
 from pyfiglet import Figlet
-from cipher import run as caesar_run
+from crypto_toolkit import run as crypto_run
 
-init(autoreset=True)  # Colorama setup
+init(autoreset=True)
 
-def print_banner():
-    f = Figlet(font='slant')
-    print(Fore.RED + f.renderText('CRYPTO TOOL'))
+def print_banner() -> None:
+    figlet = Figlet(font="slant")
+    print(Fore.RED + figlet.renderText("CRYPTO TOOL"))
 
-def main():
+def main() -> None:
     print_banner()
-    
-    while True:
-        print(Fore.CYAN + "\n=== MAIN MENU ===")
-        print(Fore.YELLOW + "1. Caesar Cipher")
-        print(Fore.YELLOW + "2. Exit")
-        
-        choice = input(Fore.GREEN + "Select an option: ").strip()
-        
-        if choice == "1":
-            caesar_run()
-        elif choice == "2":
-            print(Fore.MAGENTA + "Exiting... Stay safe, hacker! 🕶️")
-            break
-        else:
-            print(Fore.RED + "Invalid option! Try again.")
+    crypto_run()
 
 if __name__ == "__main__":
     main()
